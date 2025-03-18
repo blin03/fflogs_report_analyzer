@@ -1,6 +1,7 @@
 from fflogsapi import FFLogsClient
 from dotenv import load_dotenv
 import os
+import sys
 
 load_dotenv()
 
@@ -16,32 +17,53 @@ class EnumWrapper:
         return self.value
 
 client = FFLogsClient(FFLOGS_CLIENT_ID, FFLOGS_CLIENT_SECRET)
-client.clean_cache()
-log_url = '14QbcmXg869qpAVW' # TODO: implement user input and url parser
-#log_url = 'wxJvWMt18H4CcFgV'
+# TODO: implement input and URL parser
+# wow this difficulty field really is useless (unless??)
+#log_url = '69ZDth1gyrKb4V32' # Extreme (difficulty=100)
+log_url = 'jJnm6GwFxN3qPdD8' # Savage (difficulty=101)
+#log_url = 'wxJvWMt18H4CcFgV' # Ultimate (difficulty=100)
 report = client.get_report(log_url)
 
 
-player_list = set()
-pull_list = []
+report_fightnames = {} # In format {fight: pulls(int)}
+filtered_fights = [] # List of valid pulls
+
+# Handle non-raid pulls and instant wipes (e.g. trash pulls noted at the bottom of each report)
+for fight in report:
+    duration = fight.end_time() - fight.start_time()
+    if fight.difficulty() is None or duration < 15000: # wow the difficulty field is actually useful
+        continue
+    if fight.name() not in report_fightnames:
+        report_fightnames.setdefault(fight.name(), 0)
+    report_fightnames[fight.name()] += 1
+    filtered_fights.append(fight)
+
+
 kills = 0
-player_stats = {} # In format {player_id: [name, deaths, DDs, pulls]}
+wipes = 0
+player_list = set()
+pull_list = {} # In format {name: [kills(int), pulls(FFLogsFight obj)]}
+player_stats = {} # In format {player_id: [name(str), deaths(int), DDs(int), pulls(int)]}
+
 
 # TODO: Implement way to constrain game_zone to a single value based on user input
+# TODO: Refactor to store values in variables, you dingus
 print(f'Analysis of log at {log_url}:\n')
-for fight in report:
-    # Handle non-raid pulls and instant wipes (e.g. trash pulls noted at the bottom of each report)
-    duration = fight.end_time() - fight.start_time()
-    if not fight.game_zone() or fight.game_zone() == "Unknown" or duration < 15000: # TODO: There has got to be a better way to do this man
-        continue
-
+print(report_fightnames, '\n')
+for fight in filtered_fights:
     # Append pull information to pull list
-    # TODO: Weird off-by-one discrepancy in pull count between players?
+    pull_list.setdefault(fight.name(), [0])
     if not fight.is_kill():
-        pull_list.append(f'Wipe {fight.percentage()}% ' + fight.last_phase(as_dataclass = True).name)
+        wipes += 1
+        try:
+            pull_list[fight.name()].append(f'Wipe {fight.percentage()}% ' + fight.last_phase(as_dataclass = True).name)
+        except KeyError:
+            pull_list[fight.name()].append(f'Wipe {fight.percentage()}%')
     else:
-        pull_list.append("Kill " + str(kills+1))
         kills += 1
+        pull_list[fight.name()][0] += 1
+        pull_list[fight.name()].append(fight.name() + " Kill " + str(pull_list[fight.name()][0]))
+
 
     # Track and update player names and stats within player_stats
     player_details = fight.player_details()
@@ -67,9 +89,11 @@ for fight in report:
 
 
 print('Players: ', ', '.join(player_list), '\n')
-print(f'Kills: {kills}, ', f'Wipes: {len(pull_list)-kills}', '\n')
-print(', '.join(pull_list), '\n')
-print('SUMMARY - deaths are raw data, DDs are adjusted for mechanical wipes, and as such may not be fully accurate.')
+print(f'Kills: {kills}, ', f'Wipes: {wipes}', '\n')
+for boss in pull_list:
+    print(f'{boss}: ', ', '.join(pull_list[boss][1:]))
+print('\n')
+print('WHO GRIEFED? - Deaths are raw data, DDs are adjusted for mechanical wipes, and as such may not be fully accurate.')
 for id in player_stats:
     print(f'{player_stats[id][0]}:', f'{player_stats[id][2]} damage downs,', player_stats[id][1], f'deaths in {player_stats[id][3]} pulls')
 
